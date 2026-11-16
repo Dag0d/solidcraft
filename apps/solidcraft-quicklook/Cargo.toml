@@ -1,0 +1,42 @@
+[package]
+name = "solidcraft-quicklook"
+description = "macOS Quick Look extensions: a design's saved picture as its Finder icon, and its picture and summary on Space"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "solidcraft-thumbnail-extension"
+path = "src/thumbnail.rs"
+
+[[bin]]
+name = "solidcraft-preview-extension"
+path = "src/preview.rs"
+
+# The workspace lints, except unsafe_code: denied, not forbidden, so that src/macos.rs and each
+# extension's `provider` module can allow it: handing control to the extension host
+# (NSExtensionMain) and implementing the Objective-C provider methods have no safe API. Keep the
+# rest in sync with [workspace.lints].
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+too_many_arguments = "allow"
+type_complexity = "allow"
+neg_cmp_op_on_partial_ord = "allow"
+
+[dependencies]
+solidcraft-design-preview = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFCGTypes", "CFData"] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGColorSpace", "CGContext", "CGDataProvider", "CGImage"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSData", "NSDictionary", "NSError", "NSString", "NSURL"] }
+objc2-quick-look-thumbnailing = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-core-foundation", "objc2-core-graphics", "QLThumbnailProvider", "QLThumbnailReply", "QLThumbnailRequest"] }
+objc2-quick-look-ui = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-core-foundation", "objc2-uniform-type-identifiers", "QLFilePreviewRequest", "QLPreviewProvider", "QLPreviewReply", "QLPreviewingController"] }
+objc2-uniform-type-identifiers = { version = "0.3", default-features = false, features = ["std", "UTType", "UTCoreTypes"] }
