@@ -2,7 +2,8 @@
 //!
 //! [`ModelView`] is a layer-hosting view with a `CAMetalLayer`. It uploads the model's triangle
 //! corners once, then draws a frame only when something changes: the view's size or scale, a
-//! drag (turn), a scroll or a pinch (zoom). Between those the GPU does nothing. The shading is a
+//! drag (turn freely, like a ball under the pointer), a two-finger rotation (roll), a double
+//! click (back to the isometric start), a scroll or a pinch (zoom). Between those the GPU does nothing. The shading is a
 //! light from the viewer, as the app's own; the background is Quick Look's own (the layer is
 //! clear where there is no model).
 //!
@@ -107,6 +108,20 @@ define_class!(
         #[unsafe(method(magnifyWithEvent:))]
         fn magnify(&self, event: &NSEvent) {
             self.turn(|orbit| orbit.zoom_by((1.0 + event.magnification()) as f32));
+        }
+
+        #[unsafe(method(rotateWithEvent:))]
+        fn rotate(&self, event: &NSEvent) {
+            // Degrees, anticlockwise positive, as the orbit's roll.
+            self.turn(|orbit| orbit.roll(event.rotation().to_radians()));
+        }
+
+        #[unsafe(method(mouseDown:))]
+        fn mouse_down(&self, event: &NSEvent) {
+            // A double click goes back to the isometric start.
+            if event.clickCount() == 2 {
+                self.turn(|orbit| *orbit = Orbit { zoom: orbit.zoom, ..Orbit::default() });
+            }
         }
 
         #[unsafe(method(setFrameSize:))]

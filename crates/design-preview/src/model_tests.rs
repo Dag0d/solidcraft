@@ -109,14 +109,38 @@ fn the_orbit_starts_isometric_and_keeps_the_model_in_view() {
 }
 
 #[test]
-fn dragging_turns_and_tilts_within_bounds_and_zoom_is_clamped() {
+fn dragging_turns_freely_over_the_top_and_zoom_is_clamped() {
     let mut orbit = Orbit::default();
-    orbit.drag(100.0, 0.0);
-    assert!((orbit.yaw - (Orbit::default().yaw + 1.0)).abs() < 1e-5);
-    orbit.drag(0.0, -10_000.0);
-    assert!(orbit.pitch < std::f32::consts::FRAC_PI_2);
+    let m = orbit.matrices(10.0, 1.0);
+    let front = [m.view[2], m.view[6], m.view[10]].map(|v| v * 5.0); // the point nearest the eye
+    let before = project(&m, front);
+    // Dragging right moves the front of the model right; dragging up moves it up.
+    orbit.drag(20.0, 0.0);
+    assert!(project(&orbit.matrices(10.0, 1.0), front)[0] > before[0]);
+    let mut up = Orbit::default();
+    up.drag(0.0, 20.0);
+    assert!(project(&up.matrices(10.0, 1.0), front)[1] > before[1]);
+    // A long vertical drag goes over the top: the model ends upside down, axes still square.
+    let mut over = Orbit::default();
+    for _ in 0..157 {
+        over.drag(0.0, 2.0);
+    }
+    assert!(over.axes[1][2] < 0.0, "Z points down on screen after half a turn: {:?}", over.axes);
+    for (i, a) in over.axes.iter().enumerate() {
+        for (j, b) in over.axes.iter().enumerate() {
+            let d: f32 = (0..3).map(|k| a[k] * b[k]).sum();
+            assert!((d - if i == j { 1.0 } else { 0.0 }).abs() < 1e-4);
+        }
+    }
+    // A full roll comes back to the start.
+    let mut rolled = Orbit::default();
+    (0..4).for_each(|_| rolled.roll(std::f32::consts::FRAC_PI_2));
+    assert!((0..3).all(|i| (0..3).all(|k| (rolled.axes[i][k] - Orbit::default().axes[i][k]).abs() < 1e-4)));
+    // Hostile input changes nothing.
     let before = orbit;
     orbit.drag(f32::NAN, 1.0);
+    orbit.drag(0.0, 0.0);
+    orbit.roll(f32::INFINITY);
     orbit.zoom_by(f32::INFINITY);
     orbit.zoom_by(-1.0);
     assert_eq!(orbit, before);
