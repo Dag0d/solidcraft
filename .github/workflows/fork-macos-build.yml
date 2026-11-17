@@ -31,9 +31,13 @@ jobs:
           # Keep the hour-long build even when a later step fails.
           cache-on-failure: true
       # Ad-hoc signed, not notarized (no APPLE_* secrets on the fork).
+      # The Intel runner can't run the Apple Silicon app, so package.sh's final `--version` smoke
+      # run fails after the disk image is made, signed and verified; upload that image anyway.
       - name: Build and package (Apple Silicon only, cross-built on an Intel runner)
+        id: package
         run: packaging/macos/package.sh --arch aarch64
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - if: always() && steps.package.outcome != 'skipped'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: solidcraft-macos-aarch64-${{ github.run_number }}
           path: dist/release/*.dmg
