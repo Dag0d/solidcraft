@@ -1,13 +1,16 @@
-//! macOS Quick Look previews of SolidCraft designs: the saved picture, features and parameters.
+//! macOS Quick Look previews of SolidCraft designs: the model in 3D, turned with the pointer.
 //!
-//! A data-based Quick Look preview extension (`SolidCraft.app/Contents/PlugIns`, macOS 12 and
-//! later). Pressing Space on a design in Finder shows a card (`solidcraft_design_preview::card`):
-//! the picture a desktop save keeps in the design, the timeline's feature names and the user's
-//! parameters. Everything comes from the design's own `cache/thumbnail.png` and `document.json`,
-//! read with `solidcraft-design-preview`; nothing evaluates, meshes or draws the model.
+//! A Quick Look preview extension (`SolidCraft.app/Contents/PlugIns`). Pressing Space on a design
+//! in Finder shows the display meshes a save keeps in the design (`cache/preview.bin`, read with
+//! `solidcraft-design-preview`), drawn with Metal ([`viewer`]): drag to turn the model, scroll or
+//! pinch to zoom. A design without them shows its saved picture instead, and one with neither
+//! leaves Quick Look its generic card. Nothing evaluates or tessellates the model, and the GPU
+//! draws only when the view changes.
 
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+mod viewer;
 
 #[cfg(target_os = "macos")]
 fn main() {
@@ -22,86 +25,76 @@ fn main() {}
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 mod provider {
-    use std::ptr::{self, NonNull};
+    use std::ptr;
 
-    use block2::{DynBlock, RcBlock};
+    use block2::DynBlock;
     use objc2::rc::Retained;
-    use objc2::{AnyThread, ClassType, define_class};
-    use objc2_core_foundation::CGSize;
-    use objc2_foundation::{NSData, NSDictionary, NSError, NSObjectProtocol, NSString};
-    use objc2_quick_look_ui::{QLFilePreviewRequest, QLPreviewProvider, QLPreviewReply, QLPreviewReplyAttachment, QLPreviewingController};
-    use objc2_uniform_type_identifiers::{UTTypeHTML, UTTypePNG};
+    use objc2::{AnyThread, ClassType, MainThreadOnly, define_class};
+    use objc2_app_kit::{NSImage, NSImageScaling, NSImageView, NSResponder, NSView, NSViewController};
+    use objc2_foundation::{NSData, NSError, NSObject, NSObjectProtocol, NSSize, NSURL};
+    use objc2_quick_look_ui::QLPreviewingController;
 
-    use crate::macos;
+    use crate::{macos, viewer};
 
-    /// The card's picture, as the page refers to it (`cid:` + the attachment's key).
-    const PICTURE: &str = "picture";
-    /// The card's size before it is laid out, in points: room for a picture and two short lists.
-    const CARD: (f64, f64) = (800.0, 600.0);
+    /// The preview's size before the host lays it out, in points.
+    const SIZE: NSSize = NSSize::new(800.0, 600.0);
 
     define_class!(
-        // SAFETY: QLPreviewProvider's subclasses implement QLPreviewingController's data-based
-        // method, as this one does; the class adds no ivars or Drop.
-        #[unsafe(super(QLPreviewProvider))]
-        #[name = "SolidCraftPreviewProvider"]
-        pub struct PreviewProvider;
+        // SAFETY: NSViewController's subclasses may override `loadView`, and Quick Look's view
+        // controllers implement QLPreviewingController, as this one does. No ivars, no Drop.
+        #[unsafe(super(NSViewController, NSResponder, NSObject))]
+        #[thread_kind = MainThreadOnly]
+        #[name = "SolidCraftPreviewController"]
+        pub struct PreviewController;
 
-        unsafe impl NSObjectProtocol for PreviewProvider {}
+        unsafe impl NSObjectProtocol for PreviewController {}
 
         // SAFETY: the method's signature is the protocol's for this selector.
-        unsafe impl QLPreviewingController for PreviewProvider {
-            #[unsafe(method(providePreviewForFileRequest:completionHandler:))]
-            fn provide(&self, request: &QLFilePreviewRequest, handler: &DynBlock<dyn Fn(*mut QLPreviewReply, *mut NSError)>) {
-                match reply(request) {
-                    Some(reply) => handler.call((Retained::as_ptr(&reply).cast_mut(), ptr::null_mut())),
-                    None => {
-                        let error = macos::nothing_to_show();
-                        handler.call((ptr::null_mut(), Retained::as_ptr(&error).cast_mut()));
-                    }
+        unsafe impl QLPreviewingController for PreviewController {
+            #[unsafe(method(preparePreviewOfFileAtURL:completionHandler:))]
+            fn prepare(&self, url: &NSURL, handler: &DynBlock<dyn Fn(*mut NSError)>) {
+                if self.show(url) {
+                    handler.call((ptr::null_mut(),));
+                } else {
+                    let error = macos::nothing_to_show();
+                    handler.call((Retained::as_ptr(&error).cast_mut(),));
                 }
+            }
+        }
+
+        impl PreviewController {
+            // SAFETY: `loadView` takes and returns nothing; there is no nib to load.
+            #[unsafe(method(loadView))]
+            fn load_view(&self) {
+                self.setView(&NSView::new(self.mtm()));
+                self.setPreferredContentSize(SIZE);
             }
         }
     );
 
-    /// The card for the design `request` names; `None` when it isn't a design this can read.
-    fn reply(request: &QLFilePreviewRequest) -> Option<Retained<QLPreviewReply>> {
-        // SAFETY: a plain property read on the request the host handed us.
-        let url = unsafe { request.fileURL() };
-        let path = macos::file(&url)?;
-        let summary = solidcraft_design_preview::summary(&path)?;
-        let picture = solidcraft_design_preview::picture(&path);
-        let src = format!("cid:{PICTURE}");
-        let page = NSData::from_vec(solidcraft_design_preview::card(&summary, picture.as_ref().map(|_| src.as_str())).into_bytes());
-        // The page is ready; the block only hands it over. Blocks return objects autoreleased.
-        let data = RcBlock::new(move |_: NonNull<QLPreviewReply>, _: *mut *mut NSError| Retained::autorelease_return(page.clone()));
-        // SAFETY: the block matches the data-creation block's signature and returns a valid
-        // NSData; the reply keeps the block.
-        let reply = unsafe {
-            QLPreviewReply::initWithDataOfContentType_contentSize_dataCreationBlock(
-                QLPreviewReply::alloc(),
-                UTTypeHTML,
-                CGSize::new(CARD.0, CARD.1),
-                &data,
-            )
-        };
-        if let Some(picture) = picture {
-            // SAFETY: the attachment takes the picture's bytes and type; the reply copies the
-            // dictionary.
-            unsafe {
-                let attachment =
-                    QLPreviewReplyAttachment::initWithData_contentType(QLPreviewReplyAttachment::alloc(), &NSData::from_vec(picture.png), UTTypePNG);
-                reply.setAttachments(&NSDictionary::from_slices(&[&*NSString::from_str(PICTURE)], &[&*attachment]));
+    impl PreviewController {
+        /// Put the design at `url` in the view: its model, or else its picture. False: neither.
+        fn show(&self, url: &NSURL) -> bool {
+            let Some(path) = macos::file(url) else { return false };
+            let mtm = self.mtm();
+            if let Some(model) = solidcraft_design_preview::model(&path)
+                && let Some(view) = viewer::ModelView::new(mtm, model)
+            {
+                self.setView(&view);
+                return true;
             }
+            let Some(picture) = solidcraft_design_preview::picture(&path) else { return false };
+            let Some(image) = NSImage::initWithData(NSImage::alloc(), &NSData::from_vec(picture.png)) else { return false };
+            let view = NSImageView::imageViewWithImage(&image, mtm);
+            view.setImageScaling(NSImageScaling::ScaleProportionallyUpOrDown);
+            self.setView(&view);
+            true
         }
-        if !summary.name.is_empty() {
-            // SAFETY: the reply copies the title.
-            unsafe { reply.setTitle(&NSString::from_str(&summary.name)) };
-        }
-        Some(reply)
     }
 
-    /// Register the class before the extension host looks it up by name.
+    /// Register the classes before the extension host looks the controller up by name.
     pub fn register() {
-        PreviewProvider::class();
+        PreviewController::class();
+        viewer::ModelView::class();
     }
 }

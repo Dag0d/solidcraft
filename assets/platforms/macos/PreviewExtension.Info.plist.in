@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Template: packaging/macos/package.sh substitutes @VERSION@ and @SHORT_VERSION@ as in
-     Info.plist.in. Quick Look cards: a design's picture, features and parameters (apps/solidcraft-quicklook/src/preview.rs). -->
+     Info.plist.in. Quick Look previews: a design's model in 3D, or its picture (apps/solidcraft-quicklook/src/preview.rs). -->
 <plist version="1.0">
 <dict>
   <key>CFBundleDevelopmentRegion</key>
@@ -25,20 +25,22 @@
   <key>SolidCraftVersion</key>
   <string>@VERSION@</string>
   <key>LSMinimumSystemVersion</key>
-  <string>12.0</string>
+  <string>11.0</string>
   <key>NSExtension</key>
   <dict>
     <key>NSExtensionPointIdentifier</key>
     <string>com.apple.quicklook.preview</string>
     <key>NSExtensionPrincipalClass</key>
-    <string>SolidCraftPreviewProvider</string>
+    <string>SolidCraftPreviewController</string>
     <key>NSExtensionAttributes</key>
     <dict>
       <key>QLSupportedContentTypes</key>
       <array><string>io.tangencylabs.solidcraft.design</string></array>
-      <!-- A data-based preview (QLPreviewProvider, macOS 12), not a view controller. -->
+      <!-- A view-controller preview (the model turns with the pointer), not a data-based one. -->
       <key>QLIsDataBasedPreview</key>
-      <true/>
+      <false/>
+      <key>QLSupportsSearchableItems</key>
+      <false/>
     </dict>
   </dict>
 </dict>

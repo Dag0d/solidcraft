@@ -1,14 +1,15 @@
-//! A saved design's picture and summary, read for file browsers without the kernel.
+//! A saved design's picture and 3D display meshes, read for file browsers without the kernel.
 //!
 //! Finder icons and Quick Look (apps/solidcraft-quicklook) show a `.sc` design without opening it:
-//! they read the picture a desktop save keeps at `cache/thumbnail.png` and a short summary of
-//! `document.json` (name, units, features, parameters). Nothing here evaluates, meshes or draws
-//! the model, and nothing depends on the kernel, so an extension that links this crate stays
-//! small and quick (docs/design-container.md, "Portable thumbnail").
+//! they read the picture a desktop save keeps at `cache/thumbnail.png` ([`picture`]) and the
+//! display meshes a save may keep at `cache/preview.bin` ([`model`]). Nothing here evaluates or
+//! tessellates the model, and nothing depends on the kernel, so an extension that links this
+//! crate stays small and quick (docs/design-container.md, "Portable thumbnail" and "Provisional
+//! saved display").
 //!
 //! Input is hostile: a file browser hands over whatever file has the extension. Every read is
 //! bounded, and any problem (not a container, a missing or oversized part, a malformed picture or
-//! document) is `None`: the file browser then shows its generic icon or card.
+//! mesh) is `None`: the file browser then shows its generic icon or the picture alone.
 
 use std::fs::File;
 use std::io::{Read, Seek};
@@ -16,9 +17,9 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-mod card;
+mod model;
 
-pub use card::card;
+pub use model::{Matrices, Model, Orbit, Vertex, model};
 
 /// The container formats this reader knows (docs/design-container.md; the second is the
 /// pre-rename draft, docs/compatibility.md).
@@ -32,10 +33,6 @@ const MAX_CONTAINER_JSON: u64 = 4 << 10;
 const MAX_PICTURE: u64 = 8 << 20;
 /// A picture wider or taller than this is not one SolidCraft wrote.
 const MAX_PICTURE_SIDE: u32 = 4096;
-/// The document metadata's cap for cache-like reads (`DesignContainerReader::preview`).
-const MAX_DOCUMENT: u64 = 16 << 20;
-/// A summary lists at most this many features and parameters; the rest are counted.
-pub const MAX_LISTED: usize = 200;
 
 /// The saved picture: PNG bytes and their size in pixels.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,60 +42,12 @@ pub struct Picture {
     pub height: u32,
 }
 
-/// A parameter as the design stores it: its name and expression (`F_d1`, `60 mm`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Parameter {
-    pub name: String,
-    pub expression: String,
-}
-
-/// What a file browser shows about a design besides its picture.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Summary {
-    /// The design's name, as it is in the app's title bar.
-    pub name: String,
-    /// The design's length unit (`mm`, `in`, …).
-    pub units: String,
-    /// The timeline's feature names in order, at most [`MAX_LISTED`].
-    pub features: Vec<String>,
-    /// How many features the timeline has in all.
-    pub feature_count: usize,
-    /// The user's parameters, at most [`MAX_LISTED`] (model parameters are left out).
-    pub parameters: Vec<Parameter>,
-    /// How many user parameters the design has in all.
-    pub parameter_count: usize,
-}
-
 /// The picture a desktop save keeps in the design at `path`, if it has a valid one.
 pub fn picture(path: &Path) -> Option<Picture> {
     let mut archive = open(path)?;
     let png = part(&mut archive, "cache/thumbnail.png", MAX_PICTURE)?;
     let (width, height) = png_size(&png)?;
     Some(Picture { png, width, height })
-}
-
-/// The name, units, features and parameters of the design at `path`.
-pub fn summary(path: &Path) -> Option<Summary> {
-    let mut archive = open(path)?;
-    let document = part(&mut archive, "document.json", MAX_DOCUMENT)?;
-    summarize(&document)
-}
-
-/// The summary of a `document.json`.
-pub fn summarize(document: &[u8]) -> Option<Summary> {
-    let doc: Document = serde_json::from_slice(document).ok()?;
-    let user_parameters = doc.params.into_iter().filter(|p| !p.model);
-    let mut parameters = Vec::new();
-    let mut parameter_count = 0;
-    for p in user_parameters {
-        parameter_count += 1;
-        if parameters.len() < MAX_LISTED {
-            parameters.push(Parameter { name: p.name, expression: p.expr });
-        }
-    }
-    let feature_count = doc.features.len();
-    let features = doc.features.into_iter().take(MAX_LISTED).map(|f| f.name).collect();
-    Some(Summary { name: doc.name, units: doc.units, features, feature_count, parameters, parameter_count })
 }
 
 /// The width and height a PNG's header gives, if the bytes start as a PNG SolidCraft could write.
@@ -156,35 +105,6 @@ fn part<R: Read + Seek>(archive: &mut zip::ZipArchive<R>, name: &str, limit: u64
 #[derive(Deserialize)]
 struct Container {
     format: String,
-}
-
-/// The parts of `document.json` (crates/doc/src/format.rs) a summary reads; the rest is skipped.
-#[derive(Deserialize)]
-struct Document {
-    #[serde(default)]
-    name: String,
-    #[serde(default)]
-    units: String,
-    #[serde(default)]
-    features: Vec<Feature>,
-    #[serde(default)]
-    params: Vec<Param>,
-}
-
-#[derive(Deserialize)]
-struct Feature {
-    #[serde(default)]
-    name: String,
-}
-
-#[derive(Deserialize)]
-struct Param {
-    #[serde(default)]
-    name: String,
-    #[serde(default)]
-    expr: String,
-    #[serde(default)]
-    model: bool,
 }
 
 #[cfg(test)]
