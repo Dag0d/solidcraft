@@ -190,14 +190,13 @@ struct Entry {
     color: Option<[f32; 3]>,
 }
 
-/// How a file browser looks at a model: turned about the model's up axis (Z, as in the app) and
-/// tilted towards it, then zoomed, with an orthographic projection as the app's default camera.
+/// How a file browser looks at a model: turned freely in every direction like a ball under the
+/// pointer, then zoomed, with an orthographic projection as the app's default camera. It starts
+/// at the app's isometric Home view, Z up.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Orbit {
-    /// Radians about Z.
-    pub yaw: f32,
-    /// Radians above the XY plane.
-    pub pitch: f32,
+    /// The view's right, up and back (towards the eye) directions in model space, orthonormal.
+    pub axes: [[f32; 3]; 3],
     /// 1 fits the model in the view; larger is closer.
     pub zoom: f32,
 }
@@ -205,7 +204,12 @@ pub struct Orbit {
 impl Default for Orbit {
     /// The isometric view, as the saved picture and the app's Home view.
     fn default() -> Self {
-        Orbit { yaw: -std::f32::consts::FRAC_PI_4, pitch: 0.615_479_7, zoom: 1.0 }
+        let (yaw, pitch) = (-std::f32::consts::FRAC_PI_4, 0.615_479_7_f32);
+        let (sy, cy) = yaw.sin_cos();
+        let (sp, cp) = pitch.sin_cos();
+        let back = [-sy * cp, -cy * cp, sp];
+        let right = [cy, -sy, 0.0];
+        Orbit { axes: [right, axes::cross(back, right), back], zoom: 1.0 }
     }
 }
 
@@ -219,17 +223,62 @@ pub struct Matrices {
     pub view: [f32; 16],
 }
 
+/// Directions of the view, in single precision as the GPU takes them.
+mod axes {
+    pub fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+        [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+    }
+
+    pub fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+        a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    }
+
+    /// `v` scaled to length 1, or `None` when it has no direction.
+    pub fn unit(v: [f32; 3]) -> Option<[f32; 3]> {
+        let length = dot(v, v).sqrt();
+        (length.is_finite() && length > 1e-6).then(|| v.map(|c| c / length))
+    }
+}
+
 impl Orbit {
     /// Radians per point of pointer travel.
     const TURN: f32 = 0.01;
-    const MAX_PITCH: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 
-    /// Turn by a pointer drag of `dx`, `dy` points (right and up are positive).
+    /// Turn the model with a pointer drag of `dx`, `dy` points (right and up are positive): the
+    /// side facing the viewer follows the pointer, about the view's own axes, with no pole or
+    /// limit, so any side can be brought to the front.
     pub fn drag(&mut self, dx: f32, dy: f32) {
-        if dx.is_finite() && dy.is_finite() {
-            self.yaw = (self.yaw + dx * Self::TURN) % std::f32::consts::TAU;
-            self.pitch = (self.pitch - dy * Self::TURN).clamp(-Self::MAX_PITCH, Self::MAX_PITCH);
+        if !(dx.is_finite() && dy.is_finite()) {
+            return;
         }
+        // The drag's axis in the view's frame is (-dy, dx, 0); its angle is the travel.
+        let angle = (dx * dx + dy * dy).sqrt() * Self::TURN;
+        let [right, up, _] = self.axes;
+        let Some(axis) = axes::unit(std::array::from_fn(|i| -dy * right[i] + dx * up[i])) else { return };
+        // Turning the model by `angle` turns the view's axes the other way.
+        self.turn_about(axis, -angle);
+    }
+
+    /// Roll the model about the line of sight by `radians` (anticlockwise on screen is positive),
+    /// as a trackpad's two-finger rotation does.
+    pub fn roll(&mut self, radians: f32) {
+        if radians.is_finite() {
+            self.turn_about(self.axes[2], -radians);
+        }
+    }
+
+    /// Turn the view's axes by `angle` about the model-space unit `axis` (Rodrigues), then square
+    /// them up again so rounding never skews the view.
+    fn turn_about(&mut self, axis: [f32; 3], angle: f32) {
+        let (s, c) = angle.sin_cos();
+        let turn = |v: [f32; 3]| -> [f32; 3] {
+            let (k, d) = (axes::cross(axis, v), axes::dot(axis, v) * (1.0 - c));
+            std::array::from_fn(|i| v[i] * c + k[i] * s + axis[i] * d)
+        };
+        let [right, _, back] = self.axes.map(turn);
+        let Some(back) = axes::unit(back) else { return };
+        let Some(right) = axes::unit(std::array::from_fn(|i| right[i] - back[i] * axes::dot(right, back))) else { return };
+        self.axes = [right, axes::cross(back, right), back];
     }
 
     /// Zoom by `factor` (above 1 is closer), within 1/20 and 50 times the fitted view.
@@ -243,11 +292,7 @@ impl Orbit {
     pub fn matrices(&self, radius: f32, aspect: f32) -> Matrices {
         let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 };
         let radius = if radius.is_finite() && radius > 0.0 { radius } else { 1.0 };
-        let (sy, cy) = self.yaw.sin_cos();
-        let (sp, cp) = self.pitch.sin_cos();
-        let back = [-sy * cp, -cy * cp, sp];
-        let right = [cy, -sy, 0.0];
-        let up = [back[1] * right[2] - back[2] * right[1], back[2] * right[0] - back[0] * right[2], back[0] * right[1] - back[1] * right[0]];
+        let [right, up, back] = self.axes;
         // Half the visible height: the model's sphere fits the shorter side, with a margin.
         let half = radius * 1.1 / (self.zoom * aspect.min(1.0));
         let (x, y) = (1.0 / (half * aspect), 1.0 / half);
