@@ -14,9 +14,7 @@ fn png(width: u32, height: u32) -> Vec<u8> {
     bytes
 }
 
-const DOCUMENT: &str = r#"{"format":"solidcraft/51","name":"Filter cap","units":"mm",
-  "features":[{"id":1,"name":"Sketch1","type":"sketch"},{"id":2,"name":"Extrude1","type":"extrude"}],
-  "params":[{"name":"F_d1","expr":"60 mm","model":false,"unit":"mm"},{"name":"d9","expr":"2 mm","model":true}]}"#;
+const DOCUMENT: &[u8] = br#"{"format":"solidcraft/51","name":"Filter cap","units":"mm","features":[]}"#;
 
 /// A design container in a file of its own, removed when the test ends.
 struct Design(PathBuf);
@@ -43,34 +41,43 @@ impl Drop for Design {
 const CONTAINER: &[u8] = br#"{"format":"solidcraft-container/1"}"#;
 
 #[test]
-fn a_saved_design_gives_its_picture_and_summary() {
+fn a_saved_design_gives_its_picture_and_model() {
     let picture_bytes = png(240, 150);
-    let design =
-        Design::new("saved", &[("container.json", CONTAINER), ("document.json", DOCUMENT.as_bytes()), ("cache/thumbnail.png", &picture_bytes)]);
+    let mesh = [b"SCMESH01".as_slice(), &9_u64.to_le_bytes(), &3_u64.to_le_bytes()].concat();
+    let coordinates: Vec<u8> = [0.0_f64, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 2.0, 0.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+    let indices: Vec<u8> = [0_u32, 1, 2].iter().flat_map(|i| i.to_le_bytes()).collect();
+    let mesh = [mesh, coordinates, indices].concat();
+    let manifest = format!(r#"{{"format":"solidcraft-preview/1","build":"0.0.1","meshes":[{{"name":"Body1","offset":0,"length":{}}}]}}"#, mesh.len());
+    let design = Design::new(
+        "saved",
+        &[
+            ("container.json", CONTAINER),
+            ("document.json", DOCUMENT),
+            ("cache/thumbnail.png", &picture_bytes),
+            ("cache/preview.json", manifest.as_bytes()),
+            ("cache/preview.bin", &mesh),
+        ],
+    );
     let picture = picture(&design.0).unwrap();
     assert_eq!((picture.width, picture.height), (240, 150));
     assert_eq!(picture.png, picture_bytes);
-    let summary = summary(&design.0).unwrap();
-    assert_eq!(summary.name, "Filter cap");
-    assert_eq!(summary.units, "mm");
-    assert_eq!(summary.features, ["Sketch1", "Extrude1"]);
-    assert_eq!(summary.feature_count, 2);
-    // The model parameter (a dimension's own) is left out.
-    assert_eq!(summary.parameters, [Parameter { name: "F_d1".into(), expression: "60 mm".into() }]);
-    assert_eq!(summary.parameter_count, 1);
+    let model = model(&design.0).unwrap();
+    assert_eq!(model.vertices.len(), 3);
+    assert_eq!(model.vertices[0].position, [-1.0, -1.0, 0.0]);
 }
 
 #[test]
-fn a_design_without_a_picture_still_has_a_summary() {
-    let design = Design::new("no-picture", &[("container.json", CONTAINER), ("document.json", DOCUMENT.as_bytes())]);
+fn a_design_without_caches_has_neither() {
+    let design = Design::new("no-caches", &[("container.json", CONTAINER), ("document.json", DOCUMENT)]);
     assert_eq!(picture(&design.0), None);
-    assert_eq!(summary(&design.0).unwrap().name, "Filter cap");
+    assert_eq!(model(&design.0), None);
 }
 
 #[test]
 fn the_pre_rename_container_is_read_too() {
-    let design = Design::new("solvecraft", &[("container.json", br#"{"format":"solvecraft-container/1"}"#), ("document.json", DOCUMENT.as_bytes())]);
-    assert!(summary(&design.0).is_some());
+    let picture_bytes = png(240, 150);
+    let design = Design::new("solvecraft", &[("container.json", br#"{"format":"solvecraft-container/1"}"#), ("cache/thumbnail.png", &picture_bytes)]);
+    assert!(picture(&design.0).is_some());
 }
 
 #[test]
@@ -85,7 +92,7 @@ fn other_files_and_containers_are_misses() {
     let path = std::env::temp_dir().join(format!("solidcraft-design-preview-json-{}.sc", std::process::id()));
     std::fs::write(&path, DOCUMENT).unwrap();
     assert_eq!(picture(&path), None);
-    assert_eq!(summary(&path), None);
+    assert_eq!(model(&path), None);
     let _ = std::fs::remove_file(&path);
     assert_eq!(picture(Path::new("/nonexistent/solidcraft/design.sc")), None);
 }
@@ -102,19 +109,6 @@ fn hostile_pictures_are_misses() {
     let huge = vec![0_u8; (MAX_PICTURE + 1) as usize];
     let oversized = Design::new("oversized", &[("container.json", CONTAINER), ("cache/thumbnail.png", &huge)]);
     assert_eq!(picture(&oversized.0), None);
-}
-
-#[test]
-fn a_malformed_document_is_a_miss_and_a_long_one_is_cut() {
-    assert_eq!(summarize(b"{"), None);
-    assert_eq!(summarize(b"[1, 2]"), None);
-    // Missing fields are empty, not errors: an old or partial document still shows its name.
-    assert_eq!(summarize(br#"{"name":"Only a name"}"#).unwrap().name, "Only a name");
-    let features: Vec<String> = (0..MAX_LISTED + 5).map(|i| format!(r#"{{"name":"F{i}"}}"#)).collect();
-    let long = format!(r#"{{"name":"Long","features":[{}]}}"#, features.join(","));
-    let summary = summarize(long.as_bytes()).unwrap();
-    assert_eq!(summary.features.len(), MAX_LISTED);
-    assert_eq!(summary.feature_count, MAX_LISTED + 5);
 }
 
 #[test]
