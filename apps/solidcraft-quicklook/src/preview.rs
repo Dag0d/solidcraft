@@ -30,7 +30,7 @@ mod provider {
     use block2::DynBlock;
     use objc2::rc::Retained;
     use objc2::{AnyThread, ClassType, MainThreadOnly, define_class};
-    use objc2_app_kit::{NSImage, NSImageScaling, NSImageView, NSResponder, NSView, NSViewController};
+    use objc2_app_kit::{NSAutoresizingMaskOptions, NSImage, NSImageScaling, NSImageView, NSResponder, NSView, NSViewController};
     use objc2_foundation::{NSData, NSError, NSObject, NSObjectProtocol, NSSize, NSURL};
     use objc2_quick_look_ui::QLPreviewingController;
 
@@ -80,15 +80,25 @@ mod provider {
             if let Some(model) = solidcraft_design_preview::model(&path)
                 && let Some(view) = viewer::ModelView::new(mtm, model)
             {
-                self.setView(&view);
+                self.fill(&view);
                 return true;
             }
             let Some(picture) = solidcraft_design_preview::picture(&path) else { return false };
             let Some(image) = NSImage::initWithData(NSImage::alloc(), &NSData::from_vec(picture.png)) else { return false };
             let view = NSImageView::imageViewWithImage(&image, mtm);
             view.setImageScaling(NSImageScaling::ScaleProportionallyUpOrDown);
-            self.setView(&view);
+            self.fill(&view);
             true
+        }
+
+        /// Show `content` filling the controller's view and following its size. The host has
+        /// already taken the controller's view when it asks for the preview, so the content goes
+        /// inside that view rather than replacing it.
+        fn fill(&self, content: &NSView) {
+            let host = self.view();
+            content.setFrame(host.bounds());
+            content.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable);
+            host.addSubview(content);
         }
     }
 
