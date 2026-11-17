@@ -18,7 +18,7 @@ concurrency:
 jobs:
   build:
     if: github.repository == 'Dag0d/solidcraft'
-    runs-on: macos-latest
+    runs-on: macos-15-intel
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -27,11 +27,11 @@ jobs:
           targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          key: fork-macos-aarch64
+          key: fork-macos-intel-host-aarch64
           # Keep the hour-long build even when a later step fails.
           cache-on-failure: true
       # Ad-hoc signed, not notarized (no APPLE_* secrets on the fork).
-      - name: Build and package (Apple Silicon only)
+      - name: Build and package (Apple Silicon only, cross-built on an Intel runner)
         run: packaging/macos/package.sh --arch aarch64
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
